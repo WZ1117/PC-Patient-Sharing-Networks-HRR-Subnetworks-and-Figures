@@ -19,96 +19,94 @@ library(scales)   # rescaling for plot aesthetics
 
 ### Part 1: Load data
 df_attr <- read.csv("node_attributes_data.csv", stringsAsFactors = FALSE)
-stopifnot(all(c("patient_id","npi","provider_hrr","provider_specialty","pc_specialist_flag") %in% names(df_attr)))
 
 ### Part 2: Build provider network
 # Keep unique patient–provider pairs (unweighted bipartite incidence)
-benephys_current_year <- df_attr %>%
+benephys_pairs <- df_attr %>%
   select(patient_id, npi) %>%
   distinct()
 
 # Build bipartite graph: patients + providers
-network_bipartite <- graph_from_data_frame(benephys_current_year, directed = FALSE)
-V(network_bipartite)$type <- bipartite_mapping(network_bipartite)$type
+g_bip <- graph_from_data_frame(benephys_pairs, directed = FALSE)
+# Assign bipartite types
+V(g_bip)$type <- bipartite_mapping(g_bip)$type
 
 # Project to provider–provider (unipartite) with multiplicity = shared patients
-network_unipartite <- bipartite_projection(network_bipartite, multiplicity = TRUE)
-provider_network <- network_unipartite$proj2
+proj <- bipartite_projection(g_bip, multiplicity = TRUE)
 
-cat("Number of providers (vertices) in provider network:", vcount(provider_network), "\n")
+# choose the projection that matches NPIs
+g_prov <- if (sum(V(proj$proj1)$name %in% df_attr$npi) >=
+              sum(V(proj$proj2)$name %in% df_attr$npi)) proj$proj1 else proj$proj2
 
-# ---- Attach node attributes (specialty, hrr, pc flag) ----
-npi_nodes <- tibble(npi = V(provider_network)$name)
+cat("Providers in projected network: ", vcount(g_prov), "\n")
 
+# Add physician specialty as node attribute to annual network
+# Build an attribute frame per NPI (one row per provider)
 provider_attributes <- df_attr %>%
   select(npi, provider_hrr, provider_specialty, pc_specialist_flag) %>%
-  distinct() %>%
   mutate(
-    provider_specialty = ifelse(is.na(provider_specialty) | provider_specialty == "", "Unknown", provider_specialty)
-  )
-
-# Join attributes to the network's NPI set (one row per NPI)
-provider_attributes <- npi_nodes %>%
-  left_join(provider_attributes, by = "npi") %>%
+    provider_specialty = ifelse(is.na(provider_specialty) | provider_specialty=="",
+                                "Unknown", provider_specialty)
+  ) %>%
   distinct(npi, .keep_all = TRUE)
 
-# Required by some downstream functions you mentioned
-provider_network <- set_vertex_attr(provider_network, name = "spec", value = provider_attributes$provider_specialty)
-
-# ---- Degree-weighted strength (sum of neighbor edge weights) ----
-strength_vals <- strength(provider_network, mode = "all", weights = E(provider_network)$weight)
-provider_network <- set_vertex_attr(provider_network, name = "strength", value = strength_vals)
-
-# ---- Patient volume per provider (unique patients linked to each NPI) ----
+# Compute patient volume (unique patients per provider)
 patient_volume <- df_attr %>%
   group_by(npi) %>%
   summarise(patient_volume = n_distinct(patient_id), .groups = "drop")
 
+# Merge patient volume into provider_attributes
 provider_attributes <- provider_attributes %>%
   left_join(patient_volume, by = "npi")
 
-provider_network <- set_vertex_attr(
-  provider_network, name = "patient_volume",
-  value = provider_attributes$patient_volume
-)
+# Restrict attribute table to nodes present in the graph
+npi_nodes <- tibble(npi = V(g_prov)$name)
+provider_attributes <- npi_nodes %>%
+  left_join(provider_attributes, by = "npi")
 
-# Save network + node attributes (portable objects)
-saveRDS(provider_network, file = "provider_network.rds")
+# Add attributes to graph
+g_prov <- set_vertex_attr(g_prov, name = "spec", value = provider_attributes$provider_specialty)
+
+# Edge weights already exist from projection; compute node strength (sum of incident weights)
+V(g_prov)$strength <- strength(g_prov, mode = "all", weights = E(g_prov)$weight)
+
+# Patient volume as vertex attribute
+V(g_prov)$patient_volume <- provider_attributes$patient_volume
+
+# Save objects for reuse
+saveRDS(g_prov, file = "provider_network.rds")
 saveRDS(provider_attributes, file = "node_attributes.rds")
 
 ### Part 3: Prepare for HRR visualization
-# PC taxonomy string used to tag formally-trained PC specialists
-pal_taxonomy <- "Hospice and Palliative Care"
-
-# Identify PC specialists explicitly
-provider_attributes <- provider_attributes %>%
-  mutate(is_pc_spec = (pc_specialist_flag == 1 & provider_specialty == pal_taxonomy))
-
-# Define specialty buckets for a simpler legend and color mapping
-pcp_spec <- c("Family Medicine","Family Practice","General Practice",
-              "Internal Medicine","Geriatric Medicine",
-              "Certified Clinical Nurse Specialist","Nurse Practitioner","Physician Assistant")
+# Define groupings to collapse granular specialties
+pcp_spec <- c("Family Medicine","Family Practice","General Practice","Internal Medicine",
+              "Geriatric Medicine","Certified Clinical Nurse Specialist",
+              "Nurse Practitioner","Physician Assistant")
 
 surgeon_spec <- c("General Surgery","Orthopedic Surgery","Cardiac Surgery","Thoracic Surgery",
                   "Vascular Surgery","Neurosurgery","Urology","Ophthalmology",
                   "Surgical Oncology","Colorectal Surgery (Proctology)")
 
 medonc_spec <- c("Hematology-Oncology","Medical Oncology","Hematology")
+pal_taxonomy <- "Hospice and Palliative Care"
 
-term_spec <- function(spec){
+term_spec <- function(spec) {
   case_when(
-    spec %in% pcp_spec                ~ "PCP",
-    spec %in% medonc_spec            ~ "Medical Oncologist",
-    spec %in% surgeon_spec           ~ "Surgeon",
-    spec == "Radiation Oncology"     ~ "Radiation Oncologist",
-    spec == "Hospitalist"            ~ "Hospitalist",
-    TRUE                             ~ "Others"
+    spec %in% pcp_spec                     ~ "PCP",
+    spec %in% medonc_spec                  ~ "Medical Oncologist",
+    spec %in% surgeon_spec                 ~ "Surgeon",
+    spec == "Radiation Oncology"           ~ "Radiation Oncologist",
+    spec == "Hospitalist"                  ~ "Hospitalist",
+    spec == pal_taxonomy                   ~ "Formally-Trained PC Specialist",
+    TRUE                                   ~ "Others"
   )
 }
 
-# Color map for plot
+# Color palette
 specialty_color <- c(
   "Formally-Trained PC Specialist" = "red",
+  "non-specialist PC"              = "#4CBB17",   # green for non-spec PC PCPs
+  "Non-PC"                         = "lightgrey",
   "Medical Oncologist"             = "blue",
   "Radiation Oncologist"           = "orange",
   "Surgeon"                        = "purple",
@@ -117,92 +115,102 @@ specialty_color <- c(
   "Others"                         = "lightgrey"
 )
 
-# Attach plotting attributes to each provider (node)
 df_network_fig <- provider_attributes %>%
   mutate(
     specialty_group = term_spec(provider_specialty),
+
+    # type of PC provision
     pc_type = case_when(
       pc_specialist_flag == 1 & provider_specialty == pal_taxonomy ~ "Formally-Trained PC Specialist",
       pc_specialist_flag == 1 & provider_specialty != pal_taxonomy ~ "non-specialist PC",
-      TRUE ~ "Non-PC"
+      TRUE                                                         ~ "Non-PC"
     ),
+
+    # SHAPE indicates PC provision (square = provided PC; circle = non-PC)
     shape = ifelse(pc_type %in% c("Formally-Trained PC Specialist","non-specialist PC"), "square", "circle"),
-    # Color priority: PC type if specialist/non-specialist PC; else specialty group
-    color = dplyr::coalesce(specialty_color[pc_type], specialty_color[specialty_group])
+
+    # COLOR indicates SPECIALTY
+    color = specialty_color[specialty_group]
   )
 
 ### Part 4: Visualize the subnetwork
-# Output directory
+# Output dir
 out_dir <- "network_figures"
 dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
-# Iterate over unique HRRs
+# Plot once per HRR (unique), not for every row
 for (hrr in unique(df_network_fig$provider_hrr)) {
 
-  cat("Plotting Subnetwork for HRR:", hrr, "\n")
+  cat("Plotting subnetwork for HRR: ", hrr)
 
-  # Candidate NPIs in this HRR (drop non-PC providers in "Others" to reduce clutter)
+  # Providers to include: this HRR; drop non-PC with 'Others' specialty to declutter
   npi_list <- df_network_fig %>%
     filter(provider_hrr == hrr) %>%
     filter(!(pc_type == "Non-PC" & specialty_group == "Others")) %>%
     pull(npi)
 
-  if (length(npi_list) == 0L) next
-
-  # Induce subgraph
-  g_sub <- induced_subgraph(provider_network, vids = V(provider_network)[name %in% npi_list])
-
-  # Index into plotting attributes
+  # Subgraph induced by those providers
+  g_sub <- induced_subgraph(g_prov, vids = V(g_prov)[name %in% npi_list])
   df_sub <- df_network_fig %>% filter(npi %in% npi_list)
-  idx <- match(V(g_sub)$name, df_sub$npi)
 
-  # Attach aesthetics
+  # Attach visual attributes from df_network_fig
+  idx <- match(V(g_sub)$name, df_sub$npi)
+  V(g_sub)$vertex.shape       <- df_sub$shape[idx]
   V(g_sub)$vertex.color       <- df_sub$color[idx]
   V(g_sub)$vertex.frame.color <- ifelse(df_sub$pc_type[idx] != "Non-PC", "black", NA)
-  V(g_sub)$vertex.shape       <- df_sub$shape[idx]
-  V(g_sub)$vertex.size        <- scales::rescale(df_sub$patient_volume[idx], to = c(3, 6), na.value = 3)
-  E(g_sub)$width              <- scales::rescale(E(g_sub)$weight, to = c(0.5, 2), na.value = 0.5)
+  V(g_sub)$vertex.size        <- rescale(df_sub$patient_volume[idx], to = c(3, 6), na.rm = TRUE)
+  E(g_sub)$width              <- rescale(E(g_sub)$weight, to = c(0.5, 2.0), na.rm = TRUE)
 
-  # Clean graph (no loops, drop isolates)
+  # Remove isolcates
   g_sub <- igraph::simplify(g_sub, remove.loops = TRUE)
   g_sub <- delete_vertices(g_sub, which(degree(g_sub) == 0))
-
-  if (vcount(g_sub) == 0L) next
-
-  # Layout & plot
+  
+  # Layout (Kamada–Kawai is a good default for smaller subnetworks)
   set.seed(139)
   layout_kk <- layout_with_kk(g_sub)
 
+  # File name
   file_name <- file.path(out_dir, paste0("network_figure_", gsub("[^A-Za-z0-9]+","_", hrr), ".png"))
 
+  # Plot
   png(file_name, width = 1600, height = 1200, res = 150)
-  par(mar = c(1,1,3,1))
+  par(mar = c(1,1,2,1))
   plot(
     g_sub,
-    layout             = layout_kk,
-    vertex.label       = NA,
-    vertex.shape       = V(g_sub)$vertex.shape,
-    vertex.color       = V(g_sub)$vertex.color,
+    layout = layout_kk,
+    vertex.label = NA,
+    vertex.shape = V(g_sub)$vertex.shape,
+    vertex.color = V(g_sub)$vertex.color,
     vertex.frame.color = V(g_sub)$vertex.frame.color,
-    vertex.size        = V(g_sub)$vertex.size,
-    edge.color         = "gray66",
-    edge.width         = E(g_sub)$width,
-    main               = paste0("HRR: ", hrr, " — Palliative Care (PC) Subnetwork")
+    vertex.size = V(g_sub)$vertex.size,
+    edge.color = "gray66",
+    edge.width = E(g_sub)$width,
+    main = paste0("HRR: ", hrr, " — Palliative Care (PC) Subnetwork")
   )
 
-  # Legend (compact)
-  legend("topright", bty = "n", cex = 0.8, pt.cex = 1,
-         legend = c("Provided PC", "No PC", "", "Specialty Colors:"),
-         pch    = c(22, 21, NA, NA),
-         col    = c("black", "black", NA, NA),
-         pt.bg  = c(NA, NA, NA, NA),
-         text.font = c(2, 1, 1, 2))
+  # Legend (compact, grouped)
+  legend_items <- c(
+    "Provided PC (shape)", "Yes", "No", "",
+    "Provider Specialty (color)",
+    "PC Specialist","Medical Oncologist","Radiation Oncologist",
+    "Surgeon","PCP","Hospitalist","Others"
+  )
+  legend_shapes <- c(NA, 22, 21, NA, NA, rep(21, 7))
+  legend_colors <- c(NA, "black", "black", NA, NA, rep(NA, 7))
+  legend_fill   <- c(NA, NA, NA, NA, NA,
+                     "red","blue","orange","purple","#4CBB17","saddlebrown","lightgrey")
 
-  legend("right", inset = 0.02, bty = "n", cex = 0.8, pt.cex = 1,
-         legend = names(specialty_color),
-         pch    = 21,
-         pt.bg  = unname(specialty_color),
-         col    = "black")
+  legend("topright",
+         legend = legend_items,
+         pch = legend_shapes,
+         pt.bg = legend_fill,
+         col = legend_colors,
+         pt.cex = 1.0,
+         cex = 0.8,
+         bty = "n",
+         text.font = c(2,1,1,1,2, rep(1,7)),
+         x.intersp = 0.7,
+         y.intersp = 1.1)
 
   dev.off()
 }
