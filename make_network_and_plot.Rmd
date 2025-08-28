@@ -138,7 +138,7 @@ df_network_fig <- provider_attributes %>%
 out_dir <- "network_figures"
 dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
-# Plot once per HRR (unique), not for every row
+# Plot once per HRR (unique)
 for (hrr in unique(df_network_fig$provider_hrr)) {
 
   cat("Plotting subnetwork for HRR: ", hrr)
