@@ -2,7 +2,7 @@
 This repo is for anyone who wants to try building and visualizing networks from patient–provider data. Includes R code to create provider–provider networks, color by specialty, and plot HRR subnetworks. You can use your own dataset or generate synthetic demo data.
 
 ## What’s here
-- **make_network_and_plot.Rmd** – end-to-end: load → build bipartite/unipartite → attach attributes → plot HRR subnetworks
+- **make_network_and_plot.R** – end-to-end: load → build bipartite/unipartite → attach attributes → plot HRR subnetworks
 - **network_figures/** – output images (created on run)
 
 ## Expected columns
