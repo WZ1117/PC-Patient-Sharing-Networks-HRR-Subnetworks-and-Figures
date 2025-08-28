@@ -4,7 +4,6 @@ This repo is for anyone who wants to try building and visualizing networks from 
 ## What’s here
 - **make_network_and_plot.Rmd** – end-to-end: load → build bipartite/unipartite → attach attributes → plot HRR subnetworks
 - **network_figures/** – output images (created on run)
-- **node_attributes_data.csv** – (expected input schema)
 
 ## Expected columns
 `patient_id, npi, provider_hrr, provider_specialty, pc_specialist_flag, (optional: patient_hrr, cancer_site, pc_flag, encounter_year)`
