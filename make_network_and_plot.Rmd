@@ -73,7 +73,7 @@ V(g_prov)$strength <- strength(g_prov, mode = "all", weights = E(g_prov)$weight)
 # Patient volume as vertex attribute
 V(g_prov)$patient_volume <- provider_attributes$patient_volume
 
-# Save objects for reuse
+# Save objects
 saveRDS(g_prov, file = "provider_network.rds")
 saveRDS(provider_attributes, file = "node_attributes.rds")
 
