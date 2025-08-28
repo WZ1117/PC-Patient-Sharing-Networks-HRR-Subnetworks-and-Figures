@@ -170,7 +170,7 @@ for (hrr in unique(df_network_fig$provider_hrr)) {
   layout_kk <- layout_with_kk(g_sub)
 
   # File name
-  file_name <- file.path(out_dir, paste0("network_figure_", gsub("[^A-Za-z0-9]+","_", hrr), ".png"))
+  file_name <- file.path(out_dir, paste0("network_figure_", hrr, ".png"))
 
   # Plot
   png(file_name, width = 1600, height = 1200, res = 150)
