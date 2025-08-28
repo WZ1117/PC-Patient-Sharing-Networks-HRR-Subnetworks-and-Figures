@@ -15,6 +15,5 @@ Outputs are saved to `network_figures/`.
 
 ## Notes
 - Edges are weighted by **shared patients** between providers (from bipartite projection).
-- Node color = specialty group; PC providers are framed in black; PC specialists plotted as squares.
-- Consider a privacy threshold (e.g., hide edges with < 11 shared patients) if needed.
-- For papers where identifiability is a concern, include a **schematic demo** panel rather than raw clinician-level plots.
+- Node color = specialty group; PC providers are framed in black and plotted as squares; non-PC providers are plotted as circles.
+- We showe here a **schematic demo** figure rather than raw clinician-level plots for reference how the figures will look like.
